@@ -1,6 +1,22 @@
 var Set = Class.extend(function() {
 	this.constructor = function(src) {
-		this.src = src || [];
+		src = src || [];
+		this.src = [];
+		for(var i=0;i<src.length;i++) {
+			this.add(src[i]);
+		}
+	}
+
+	this.next = function() {
+		return this.src.shift();
+	}
+
+	this.at = function(i) {
+		return this.src[i];
+	}
+
+	this.size = function() {
+		return this.src.length;
 	}
 
 	this.contains = function(el) {
@@ -19,8 +35,23 @@ var Set = Class.extend(function() {
 		}
 	}
 
+	this.query = function(lambda) {
+		return new Set(this.src.filter(lambda));
+	}
+
+	this.map = function(lambda) {
+		return this.src.map(lambda);
+	}
+
 	this.get = function() {
 		return this.src.concat();
+	}
+
+	this.addAll = function(s) {
+		var self = this;
+		s.map(function(el) {
+			self.add(el);
+		});
 	}
 })
 
@@ -37,6 +68,30 @@ var Utils = {
 		});
 		return snapped;
 	},
+	snapNearest: function(n,v) {
+		var c = Math.ceil(n / v) * v;
+		var f = Math.floor(n / v) * v;
+		if(Math.abs(n - c) < Math.abs(n - f)) {
+			return c;
+		} else {
+			return f;
+		}
+	},
+	snapPointNearest: function(p,v) {
+		return new paper.Point(
+			Utils.snapNearest(p.x,v),
+			Utils.snapNearest(p.y,v)
+		);
+	},
+	indexOfSlice: function(arr,slice) {
+		for(var i=0;i<arr.length;i++) {
+			var sub = arr.slice(i,i + slice.length);
+			if(Utils.sameArray(sub,slice)) {
+				return i;
+			}
+		}
+		return -1;
+	},
 	sameArray: function(a,b) {
 		if(a.length != b.length) {
 			return false;
@@ -47,5 +102,17 @@ var Utils = {
 			}
 		}
 		return true;
+	},
+	normalize: function(angle) {
+		if(angle > 360) {
+			while(angle > 180) {
+				angle -= 360;
+			}
+		} else {
+			while(angle < -180) {
+				angle += 360;
+			}
+		}
+		return angle;
 	}
 }
