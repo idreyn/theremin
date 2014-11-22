@@ -8,6 +8,7 @@ var Application = Class.extend(function(){
 });
 
 var Draw = Class.extend(function() {
+	var self = this;
 	var canvas;
 	var p = paper;
 	var nextElementTimeout;
@@ -15,9 +16,15 @@ var Draw = Class.extend(function() {
 	var elementsNearCursor;
 	var cursorOnDragPoint;
 	var isDraggingNode;
+	var isAssigningValue;
+	var wasAssigningValue;
+	var assignStartDistance;
+	var assignInitialValue;
+	var lastValidCursorPosition;
 
 	this.constructor = function(c) {
 		canvas = c;
+		this.recog = new Recognizer();
 		this.elements = new Set();
 		this.gridSize = 30;
 		var h = Hammer(canvas);
@@ -75,6 +82,7 @@ var Draw = Class.extend(function() {
 			if(nextElementTimeout) clearTimeout(nextElementTimeout);
 			this.scribble.moveTo(this.globalToLocal(e.center));
 		} else {
+			lastValidCursorPosition = this.cursorBlip.position;
 			isDraggingNode = true;
 			dragUpdateFunctions = elementsNearCursor.map(function(el) {
 				if(el.start.equals(self.cursorBlip.position)) {
@@ -88,40 +96,106 @@ var Draw = Class.extend(function() {
 
 	this.pan = function(e) {
 		var self = this;
+		var mouse = this.globalToLocal(e.center);
 		if(!isDraggingNode) {
-			this.scribble.lineTo(this.globalToLocal(e.center));
-			for(var i=0;i<this.scribble.children.length;i++) {
-				var path = this.scribble.children[i];
-				if(path.length > 5) {
-					//path.flatten(6);
+			this.scribble.lineTo(mouse);
+			if(!isAssigningValue) {
+				try {
+					var rec = this.recog.guess(Utils.compoundPathToDollarPCloud(this.scribble));
+					if(rec.Name == '0' && rec.Score > 0.25) {
+						var scribbled = this.scribbledOutElements(this.scribble);
+						if(scribbled.size()) {
+							this.selectedElement = scribbled.at(0);
+							this.selectedElement.path.strokeColor = '#33D';
+							isAssigningValue = true;
+							assignInitialValue = this.selectedElement.value;
+							assignStartDistance = this.selectedElement.path.position.getDistance(mouse);
+						}
+					}
+
+				} catch(e) {
+				
 				}
+			} else {
+				var center = this.selectedElement.path.position;
+				var distance = this.selectedElement.path.position.getDistance(mouse);
+				var value = Utils.snapNearest(Utils.snapNearest(
+					Math.pow(3,distance/assignStartDistance),
+					Math.pow(10,-1 + Math.floor((distance / assignStartDistance)/2))
+				),0.5);
+				this.selectedElement.value = value;
+				this.selectedElement.renderText();
 			}
 		} else {
-			this.isValidDragState();
 			dragUpdateFunctions.forEach(function(lambda) {
 				lambda(self.cursorBlip.position);
 			});
+			if(!this.isValidPlacement()) {
+				dragUpdateFunctions.forEach(function(lambda) {
+					lambda(lastValidCursorPosition);
+				});
+			} else {
+				lastValidCursorPosition = self.cursorBlip.position;
+			}
 		}
 	}
 
 	this.panEnd = function(e) {
+		if(this.selectedElement) {
+			this.selectedElement.path.strokeColor = '#000';
+			this.selectedElement = null;
+		}
 		if(isDraggingNode) {
 			this.nodeDragAftermath();
+		}
+		if(isAssigningValue) {
+			this.scribble.remove();
+			isAssigningValue = false;
+			wasAssigningValue = true;
 		}
 		isDraggingNode = false;
 		nextElementTimeout = setTimeout(this.beginElement,500);
 	}
 
+	this.nodeDragAftermath = function() {
+		this.removeZeroLengthElements();
+	}
+
+	this.removeZeroLengthElements = function() {
+		this.elements.query(function(el) {
+			if(el.start.equals(el.end)) {
+				el.destruct();
+				self.elements.remove(el);
+			}
+		});
+	}
+
 	this.beginElement = function() {
 		if(this.scribble) {
-			var res = this.detectElementType();
-			if(res.type == 'removal') {
-				this.scribble.strokeColor = '#D33';
+			if(wasAssigningValue) {
+				wasAssigningValue = false;
 			} else {
-				this.addElement(res);
-				this.scribble.strokeColor = '#DDD';
+				var rec = this.recog.guess(Utils.compoundPathToDollarPCloud(this.scribble));
+				var scribbledOutElements = this.scribbledOutElements(this.scribble,3);
+				if(scribbledOutElements.size()) {
+					if(isAssigningValue) {
+
+					} else {
+						scribbledOutElements.map(function(el) {
+							self.elements.remove(el);
+							el.destruct();
+						});
+					}
+				} else {
+					var res = this.detectElementType();
+					if(res) {
+						this.addElement(res);
+					}
+				}
+				this.scribble.remove();
 			}
 		}
+		isAssigningValue = false;
 		this.scribble = new p.CompoundPath();
 		this.scribble.strokeColor = '#CCC';
 		this.scribble.strokeWidth = 2;
@@ -136,23 +210,64 @@ var Draw = Class.extend(function() {
 			Utils.snapPointNearest(analysis.end,this.gridSize),
 			0
 		);
+		if(analysis.length < Math.sqrt(Math.pow(2 * this.gridSize,2))) {
+			return;
+		}
 		o.render();
 		this.elements.add(o);
-		this.resolveIntersections(new Set([o]));
+		if(!this.isValidPlacement()) {
+			this.elements.remove(o);
+			o.destruct();
+		} else {
+			this.resolveIntersections(new Set([o]));
+		}
 	}
 
-	this.isValidDragState = function() {
+	this.scribbledOutElements = function(scribble,threshold) {
+		threshold = threshold || 2;
+		var res = new Set();
 		for(var i=0;i<this.elements.size();i++) {
-			for(var j=0;j<this.elements.size();j++) {
+			var el = this.elements.at(i);
+			var ins = scribble.getIntersections(el.path);
+			if(ins.length >= threshold) {
+				res.add(el);
+			}
+		}
+		return res;
+	}
+
+	this.isValidPlacement = function() {
+		this.removeZeroLengthElements();
+		for(var i=0;i<this.elements.size();i++) {
+			var a = this.elements.at(i);
+			if(a.start.equals(a.end)) {
+				return false;
+			}
+			for(var j=i;j<this.elements.size();j++) {
 				if(i == j) {
 					continue;
 				}
-				var a = this.elements.at(i);
 				var b = this.elements.at(j);
-				if(a.
-				if(ins.length > 1) console.log(ins);
+				if(
+				   a.pointOnLine(b.end) || 
+				   b.pointOnLine(a.end) ||
+				   a.pointOnLine(b.start) || 
+				   b.pointOnLine(a.start) ||
+				   (a.start.equals(b.start) && a.end.equals(b.end)) ||
+				   (a.start.equals(b.end) && a.end.equals(b.start))
+				) {
+					console.log('nope');
+					return false;
+				}
 			}
 		}
+		return true;
+	}
+
+	this.elementsTouching = function(el) {
+		return this.elements.query(function(e) {
+			return e.path.getIntersections(el.path).length
+		});
 	}
 
 	this.resolveIntersections = function(test) {
@@ -166,7 +281,6 @@ var Draw = Class.extend(function() {
 				}
 				var ins = el.intersection(t);
 				if(ins) {
-					console.log(t,el);
 					var m = t.splitAt(ins);
 					var n = el.splitAt(ins);
 					m[0].end = m[1].start = Utils.snapPointNearest(m[0].end,self.gridSize);
@@ -175,8 +289,8 @@ var Draw = Class.extend(function() {
 					m[1].render();
 					n[0].render();
 					n[1].render();
-					t.path.remove();
-					el.path.remove();
+					t.destruct()
+					el.destruct();
 					rest.add(m[0]);
 					rest.add(m[1]);
 					rest.add(n[0]);
@@ -246,6 +360,9 @@ var Draw = Class.extend(function() {
 				}
 			}
 			segments = segments.concat(sub_segments);
+		}
+		if(!segments.length) {
+			return;
 		}
 		segments = segments.reduce(function(accumulated,next) {
 			if(!(accumulated instanceof Array)) {
@@ -335,7 +452,13 @@ var OnePort = Class.extend(function() {
 		this.value = value;
 	}
 
-	this.render = function() {
+	this.destruct = function() {
+		if(this.path) this.path.remove();
+		if(this.text) this.text.remove();
+		this.text = null;
+	}
+
+	this.renderPath = function() {
 		var length = this.start.getDistance(this.end);
 		var path = new paper.CompoundPath();
 		path.strokeColor = 'black';
@@ -344,10 +467,30 @@ var OnePort = Class.extend(function() {
 		path.lineBy(new paper.Point(length/4,0));
 		this.renderCenter(path,length/2);
 		path.lineBy(new paper.Point(length/4,0));
-		path.translate(new paper.Point(0,0));
 		path.rotate(this.end.subtract(this.start).angle,this.start);
 		this.path = path;
 		return path;
+	}
+
+	this.renderText = function() {
+		if(!this.text) {
+			this.text = $('<span></span>');
+			$('body').append(this.type == 'wire' ? '' : this.text);
+		}
+		this.text.css('top',this.path.position.y).css('left',this.path.position.x);
+		this.text.html(this.value.toString());
+	}
+
+	this.render = function() {
+		if(this.path) this.path.remove();
+		this.who_pooped_the_bed = new paper.Group();
+		this.who_pooped_the_bed.addChild(this.renderPath());
+		this.renderText();
+		return this.who_pooped_the_bed;
+	}
+
+	this.center = function(n) {
+		return this.start.add(this.end.subtract(this.start).divide(n || 2));
 	}
 
 	this.length = function() {
@@ -355,11 +498,11 @@ var OnePort = Class.extend(function() {
 	}
 
 	this.slope = function() {
-		this.end.subtract(this.start).angle;
+		return this.end.subtract(this.start).angle;
 	}
 
 	this.pointOnLine = function(p) {
-		return p.subtract(this.start).angle == this.slope() && Math.max(p.getDistance(this.start),p.getDistance(this.end)) < this.length();
+		return Math.abs(p.subtract(this.start).angle) == Math.abs(this.slope()) && Math.max(p.getDistance(this.start),p.getDistance(this.end)) < this.length();
 	}
 
 	this.intersection = function(op) {
@@ -371,7 +514,7 @@ var OnePort = Class.extend(function() {
 	this.setStart = function(s) {
 		this.start = s;
 		if(this.path) {
-			this.path.remove();
+			this.destruct();
 			this.render();
 		} else {
 			this.render();
@@ -381,7 +524,7 @@ var OnePort = Class.extend(function() {
 	this.setEnd = function(e) {
 		this.end = e;
 		if(this.path) {
-			this.path.remove();
+			this.destruct();
 			this.render();
 		} else {
 			this.render();
@@ -392,7 +535,7 @@ var OnePort = Class.extend(function() {
 		if(p == this.start || p == this.end) {
 			return this;
 		}
-		if(p.getDistance(this.start) > p.getDistance(this.end)) {
+		if(p.getDistance(this.start) < p.getDistance(this.end)) {
 			return [
 				new OnePort('wire',this.start,p,this.value),
 				new OnePort(this.type,p,this.end,this.value)
@@ -406,7 +549,7 @@ var OnePort = Class.extend(function() {
 	}
 
 	this.renderCenter = function(path,length) {
-		if(this.type == 'wire') {
+		if(this.type == 'wire' || this.type == 'current_source') {
 			path.lineBy(new paper.Point(length,0));
 		}
 		if(this.type == 'resistor') {
@@ -420,6 +563,9 @@ var OnePort = Class.extend(function() {
 				path.lineBy(new paper.Point(resistorLength/6,resistorHeight));
 			}
 			path.lineBy(new paper.Point(lineLength,0));
+		}
+		if(this.type == 'current_source') {
+			path.lineBy(new paper.Point(length,0));
 		}
 		if(this.type == 'inductor') {
 			var inductorLength = Math.min(length,100);

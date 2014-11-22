@@ -114,5 +114,27 @@ var Utils = {
 			}
 		}
 		return angle;
+	},
+	compoundPathToDollarPCloudString: function(p) {
+		var res = [];
+		for(var i=0;i<p.children.length;i++) {
+			var path = p.children[i];
+			for(var j=0;j<path.segments.length;j++) {
+				var s = path.segments[j];
+				res.push('new Point(' + Math.round(s.point.x) + ',' + Math.round(s.point.y) + ',' + (i + 1).toString() + ')');
+			}
+		}
+		return '[' + res.join(',') + ']';
+	},
+	compoundPathToDollarPCloud: function(p) {
+		var res = [];
+		for(var i=0;i<p.children.length;i++) {
+			var path = p.children[i];
+			for(var j=0;j<path.segments.length;j++) {
+				var s = path.segments[j];
+				res.push(new Point(Math.round(s.point.x), Math.round(s.point.y), i+1));
+			}
+		}
+		return res;
 	}
 }

@@ -2,4 +2,11 @@ html, body {
 	width: 100%;
 	height: 100%;
 	margin: 0;
+	user-select: none !important;
+	font-family: 'Inconsolata';
+}
+
+body span {
+	position: absolute;
+	font-size: 18px;
 }
